@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// vpad [name] [vendor] [product]: creates a virtual Bluetooth gamepad through /dev/uinput (writable by the
+// vpad [name] [vendor] [product] [phys]: creates a virtual Bluetooth gamepad through /dev/uinput (writable by the
 // adb shell on the Odin 3), so that multiplayer can be tested without pairing a real controller. Defaults to a
-// DualShock 4 ("Wireless Controller", 054c:09cc), which Android maps with its stock key layout.
+// DualShock 4 ("Wireless Controller", 054c:09cc), which Android maps with its stock key layout. Give each pad its
+// own phys: Android merges input devices with identical ids and location into a single InputDevice.
 // Reads commands on stdin until EOF or "quit":
-//   key <a|b|x|y|l1|r1|l2|r2|start|select|l3|r3> <0|1>
+//   key <a|b|x|y|l1|r1|l2|r2|start|select|l3|r3|mode> <0|1>
 //   abs <lx|ly|rx|ry|lt|rt|hx|hy> <value>        (sticks 0..255 centred on 128, triggers 0..255, hat -1..1)
 //   tap <key> [ms]
 //   sleep <ms>
@@ -30,12 +31,14 @@ static void emit(int type, int code, int value)
 
 static void sync_events() { emit(EV_SYN, SYN_REPORT, 0); }
 
+// Codes of a DualShock 4 driven by hid-playstation, which the console maps with
+// Vendor_054c_Product_09cc_Version_8100.kl (right stick on RX/RY, triggers on Z/RZ).
 static const struct
 {
   const char* name;
   int code;
-} keys[] = {{"a", BTN_SOUTH}, {"b", BTN_EAST},     {"x", BTN_NORTH},      {"y", BTN_WEST},
-            {"l1", BTN_TL},   {"r1", BTN_TR},      {"l2", BTN_TL2},       {"r2", BTN_TR2},
+} keys[] = {{"a", BTN_SOUTH},  {"b", BTN_EAST},       {"x", BTN_WEST},       {"y", BTN_NORTH},
+            {"l1", BTN_TL},    {"r1", BTN_TR},        {"l2", BTN_TL2},       {"r2", BTN_TR2},
             {"select", BTN_SELECT}, {"start", BTN_START}, {"l3", BTN_THUMBL}, {"r3", BTN_THUMBR},
             {"mode", BTN_MODE}};
 
@@ -82,6 +85,8 @@ int main(int argc, char** argv)
     dev.absmin[axes[i].code] = axes[i].min;
     dev.absmax[axes[i].code] = axes[i].max;
   }
+  if (argc > 4)
+    ioctl(fd, UI_SET_PHYS, argv[4]);
   write(fd, &dev, sizeof(dev));
   if (ioctl(fd, UI_DEV_CREATE) < 0)
   {
