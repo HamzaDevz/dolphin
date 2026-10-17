@@ -65,9 +65,13 @@ android {
     buildTypes {
         // Signed by release key, allowing for upload to Play Store.
         release {
-            if (project.hasProperty("keystore")) {
-                signingConfig = signingConfigs.getByName("release")
+            // Odin 3 build: its own package and key, installed alongside the official app.
+            signingConfig = if (project.hasProperty("keystore")) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
             }
+            applicationIdSuffix = ".odin3"
 
             resValue("string", "app_name_suffixed", "Dolphin Emulator")
             isMinifyEnabled = true

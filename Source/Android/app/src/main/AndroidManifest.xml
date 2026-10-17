@@ -95,6 +95,7 @@
         <activity
             android:name=".activities.EmulationActivity"
             android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|navigation"
             android:theme="@style/Theme.Dolphin.Main"
             android:preferMinimalPostProcessing="true"/>
 
