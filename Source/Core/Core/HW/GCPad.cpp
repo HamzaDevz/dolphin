@@ -15,10 +15,8 @@
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
-#include "Core/Core.h"
 #include "Core/HW/GCPadEmu.h"
 #include "Core/HW/SI/SI_Device.h"
-#include "Core/System.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
@@ -39,7 +37,7 @@ InputConfig* GetConfig()
 #ifdef ANDROID
 static Common::EventHook s_gamepad_hotplug_hook;
 static std::mutex s_gamepads_mutex;
-static std::vector<std::string> s_known_gamepads;
+static InputCommon::GamepadHotplug s_hotplug;
 
 // The connected gamepads (Android gives them a controller number), in player order.
 static std::vector<std::shared_ptr<ciface::Core::Device>> GetGamepads()
@@ -123,24 +121,25 @@ static void AssignGamepads(const std::vector<std::string>* new_gamepads)
 void AutoAssignGamepads()
 {
   std::lock_guard lk(s_gamepads_mutex);
-  s_known_gamepads = GetNames(GetGamepads());
+  s_hotplug.Reset(GetNames(GetGamepads()));
   AssignGamepads(nullptr);
 }
 
-// A gamepad connected during a game takes the next free port.
 static void OnDevicesChanged()
 {
   std::lock_guard lk(s_gamepads_mutex);
-  const auto gamepads = GetNames(GetGamepads());
-  std::vector<std::string> added;
-  for (const std::string& gamepad : gamepads)
-  {
-    if (std::ranges::find(s_known_gamepads, gamepad) == s_known_gamepads.end())
-      added.push_back(gamepad);
-  }
-  s_known_gamepads = gamepads;
+  s_hotplug.DevicesChanged(InputCommon::GamepadHotplug::Clock::now());
+}
 
-  if (!added.empty() && Core::IsRunningOrStarting(Core::System::GetInstance()))
+// A gamepad connected during a game takes the next free port, once the devices have settled.
+// Done from the pad polling, so only while a game runs.
+static void AssignConnectedGamepads()
+{
+  std::lock_guard lk(s_gamepads_mutex);
+  if (!s_hotplug.IsSettled(InputCommon::GamepadHotplug::Clock::now()))
+    return;
+  const auto added = s_hotplug.TakeNewGamepads(GetNames(GetGamepads()));
+  if (!added.empty())
     AssignGamepads(&added);
 }
 #else
@@ -193,6 +192,9 @@ bool IsInitialized()
 
 GCPadStatus GetStatus(int pad_num)
 {
+#ifdef ANDROID
+  AssignConnectedGamepads();
+#endif
   return static_cast<GCPad*>(s_config.GetController(pad_num))->GetInput();
 }
 

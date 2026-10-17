@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <string_view>
+#include <utility>
 
 namespace InputCommon
 {
@@ -64,5 +65,33 @@ std::vector<GamepadAssignment> PlanGamepadAssignment(const std::vector<GamepadPo
     ++port;
   }
   return plan;
+}
+
+void GamepadHotplug::Reset(std::vector<std::string> gamepads)
+{
+  m_known = std::move(gamepads);
+  m_changed_at.reset();
+}
+
+void GamepadHotplug::DevicesChanged(Clock::time_point now)
+{
+  m_changed_at = now;
+}
+
+bool GamepadHotplug::IsSettled(Clock::time_point now) const
+{
+  return m_changed_at && now - *m_changed_at >= SETTLE_TIME;
+}
+
+std::vector<std::string> GamepadHotplug::TakeNewGamepads(const std::vector<std::string>& gamepads)
+{
+  std::vector<std::string> added;
+  for (const std::string& gamepad : gamepads)
+  {
+    if (!Contains(m_known, gamepad))
+      added.push_back(gamepad);
+  }
+  Reset(gamepads);
+  return added;
 }
 }  // namespace InputCommon

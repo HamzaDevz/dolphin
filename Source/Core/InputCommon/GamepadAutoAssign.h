@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,4 +45,25 @@ std::vector<GamepadAssignment> PlanGamepadAssignment(const std::vector<GamepadPo
                                                      const std::vector<std::string>& connected,
                                                      const std::vector<std::string>& gamepads,
                                                      const std::vector<std::string>* new_gamepads);
+
+// Finds the gamepads connected during a game once the devices have stopped changing for a moment:
+// the Odin 3 hides every external gamepad behind its own copy right after it connects, and only
+// the copy must become a player.
+class GamepadHotplug
+{
+public:
+  using Clock = std::chrono::steady_clock;
+  static constexpr auto SETTLE_TIME = std::chrono::milliseconds(500);
+
+  // gamepads: the gamepads that already have their place.
+  void Reset(std::vector<std::string> gamepads);
+  void DevicesChanged(Clock::time_point now);
+  bool IsSettled(Clock::time_point now) const;
+  // The gamepads that were not there before, in player order.
+  std::vector<std::string> TakeNewGamepads(const std::vector<std::string>& gamepads);
+
+private:
+  std::vector<std::string> m_known;
+  std::optional<Clock::time_point> m_changed_at;
+};
 }  // namespace InputCommon
