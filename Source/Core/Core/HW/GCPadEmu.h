@@ -49,6 +49,8 @@ public:
   ControllerEmu::ControlGroup* GetGroup(PadGroup group);
 
   void LoadDefaults(const ControllerInterface& ciface) override;
+  // Maps the port to a gamepad the way the standard gamepad profile does.
+  void LoadGamepadDefaults(const ControllerInterface& ciface, const ciface::Core::Device& device);
 
   // Values averaged from multiple genuine GameCube controllers.
   static constexpr ControlState MAIN_STICK_GATE_RADIUS = 0.7937125;

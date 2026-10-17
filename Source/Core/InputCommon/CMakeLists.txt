@@ -3,6 +3,8 @@ add_library(inputcommon
   DynamicInputTextureManager.h
   GCAdapter.cpp
   GCAdapter.h
+  GamepadAutoAssign.cpp
+  GamepadAutoAssign.h
   ImageOperations.cpp
   ImageOperations.h
   InputConfig.cpp

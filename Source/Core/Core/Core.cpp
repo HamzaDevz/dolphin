@@ -537,6 +537,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   g_controller_interface.ChangeWindow(wsi.render_window);
 
   Pad::LoadConfig();
+  Pad::AutoAssignGamepads();
   Pad::LoadGBAConfig();
   Keyboard::LoadConfig();
 

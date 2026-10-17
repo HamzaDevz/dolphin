@@ -4,6 +4,10 @@
 #include "Core/HW/GCPadEmu.h"
 
 #include <array>
+#include <initializer_list>
+#include <string>
+
+#include <fmt/format.h>
 
 #include "Common/Common.h"
 #include "Common/CommonTypes.h"
@@ -259,6 +263,84 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
   m_triggers->SetControlExpression(0, "`Q`");  // L
   m_triggers->SetControlExpression(1, "`W`");  // R
 #endif
+}
+
+void GCPad::LoadGamepadDefaults(const ControllerInterface& ciface, const ciface::Core::Device& device)
+{
+  // The inputs of the gamepad among the names, as one expression.
+  const auto any_of = [&device](std::initializer_list<std::string> names) {
+    std::string expression;
+    for (const std::string& name : names)
+    {
+      if (!device.FindInput(name))
+        continue;
+      if (!expression.empty())
+        expression += " | ";
+      expression += fmt::format("`{}`", name);
+    }
+    return expression;
+  };
+
+  const auto lock = GetStateLock();
+  EmulatedController::LoadDefaults(ciface);
+  ciface::Core::DeviceQualifier qualifier;
+  qualifier.FromDevice(&device);
+  SetDefaultDevice(qualifier);
+
+  // Buttons
+  m_buttons->SetControlExpression(0, any_of({"Button A"}));
+  m_buttons->SetControlExpression(1, any_of({"Button B"}));
+  m_buttons->SetControlExpression(2, any_of({"Button X"}));
+  m_buttons->SetControlExpression(3, any_of({"Button Y"}));
+  m_buttons->SetControlExpression(4, any_of({"Button R1"}));  // Z
+  m_buttons->SetControlExpression(5, any_of({"Start"}));
+
+  // Control Stick
+  m_main_stick->SetControlExpression(0, any_of({"Axis 1-"}));
+  m_main_stick->SetControlExpression(1, any_of({"Axis 1+"}));
+  m_main_stick->SetControlExpression(2, any_of({"Axis 0-"}));
+  m_main_stick->SetControlExpression(3, any_of({"Axis 0+"}));
+
+  // C Stick: Android reports the right stick as Z/RZ on most gamepads, as RX/RY on the others.
+  const bool z_rz = device.FindInput("Axis 11+") && device.FindInput("Axis 14+");
+  const int c_x = z_rz ? 11 : 12;
+  const int c_y = z_rz ? 14 : 13;
+  m_c_stick->SetControlExpression(0, any_of({fmt::format("Axis {}-", c_y)}));
+  m_c_stick->SetControlExpression(1, any_of({fmt::format("Axis {}+", c_y)}));
+  m_c_stick->SetControlExpression(2, any_of({fmt::format("Axis {}-", c_x)}));
+  m_c_stick->SetControlExpression(3, any_of({fmt::format("Axis {}+", c_x)}));
+
+  m_main_stick->SetCalibrationFromGate(ControllerEmu::RoundStickGate(1.0));
+  m_c_stick->SetCalibrationFromGate(ControllerEmu::RoundStickGate(1.0));
+
+  // Triggers: the analog axis (LTRIGGER or BRAKE, RTRIGGER or GAS) also presses the digital button
+  // past the threshold, like the real controller. Gamepads without one only have the buttons.
+  std::string l = any_of({"Axis 17+", "Axis 23+"});
+  std::string r = any_of({"Axis 18+", "Axis 22+"});
+  if (l.empty())
+    l = any_of({"Button L2"});
+  if (r.empty())
+    r = any_of({"Button R2"});
+  m_triggers->SetControlExpression(0, l);
+  m_triggers->SetControlExpression(1, r);
+  m_triggers->SetControlExpression(2, l);
+  m_triggers->SetControlExpression(3, r);
+
+  // D-Pad: a hat on most gamepads, keys on the others.
+  m_dpad->SetControlExpression(0, any_of({"Axis 16-", "Up"}));
+  m_dpad->SetControlExpression(1, any_of({"Axis 16+", "Down"}));
+  m_dpad->SetControlExpression(2, any_of({"Axis 15-", "Left"}));
+  m_dpad->SetControlExpression(3, any_of({"Axis 15+", "Right"}));
+
+  // Rumble on every motor of the gamepad
+  std::string motors;
+  for (const ciface::Core::Device::Output* output : device.Outputs())
+  {
+    if (!motors.empty())
+      motors += " | ";
+    motors += fmt::format("`{}`", output->GetName());
+  }
+  m_rumble->SetControlExpression(0, motors);
 }
 
 bool GCPad::GetMicButton() const

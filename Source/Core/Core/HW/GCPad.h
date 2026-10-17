@@ -20,6 +20,8 @@ namespace Pad
 void Shutdown();
 void Initialize();
 void LoadConfig();
+// Hands the connected gamepads to the controller ports that have none (Android).
+void AutoAssignGamepads();
 void GenerateDynamicInputTextures();
 bool IsInitialized();
 
