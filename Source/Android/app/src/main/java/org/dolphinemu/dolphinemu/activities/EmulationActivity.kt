@@ -5,6 +5,7 @@ package org.dolphinemu.dolphinemu.activities
 import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Rect
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -212,6 +213,9 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
         settings = Settings()
         settings.loadSettings()
 
+        getSystemService(DisplayManager::class.java)
+            .registerDisplayListener(dockListener, Handler(Looper.getMainLooper()))
+
         // Set these options now so that the SurfaceView the game renders into is the right size.
         enableFullscreenImmersive()
 
@@ -347,7 +351,22 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
 
     override fun onDestroy() {
         super.onDestroy()
+        getSystemService(DisplayManager::class.java).unregisterDisplayListener(dockListener)
         settings.close()
+    }
+
+    // The TV went away with the dock: player 1 goes back to the handheld's own gamepad.
+    private val dockListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+
+        override fun onDisplayChanged(displayId: Int) {}
+
+        override fun onDisplayRemoved(displayId: Int) {
+            val displayManager = getSystemService(DisplayManager::class.java)
+            if (displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).isEmpty()) {
+                NativeLibrary.HandBackFirstPlayer()
+            }
+        }
     }
 
     override fun onBackPressed() {

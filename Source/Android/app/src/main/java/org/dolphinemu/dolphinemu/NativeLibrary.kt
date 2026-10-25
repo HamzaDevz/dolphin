@@ -230,6 +230,12 @@ object NativeLibrary {
     external fun SaveScreenShot()
 
     /**
+     * Gives player 1 back to the handheld's own gamepad, when the handheld leaves its dock.
+     */
+    @JvmStatic
+    external fun HandBackFirstPlayer()
+
+    /**
      * Saves a game state to the slot number.
      *
      * @param slot The slot location to save state to.

@@ -20,6 +20,7 @@
 #include "InputCommon/ControllerEmu/ControlGroup/MixedTriggers.h"
 #include "InputCommon/ControllerEmu/StickGate.h"
 #include "InputCommon/GCPadStatus.h"
+#include "InputCommon/GamepadAutoAssign.h"
 
 static const u16 button_bitmasks[] = {
     PAD_BUTTON_A,
@@ -287,10 +288,12 @@ void GCPad::LoadGamepadDefaults(const ControllerInterface& ciface, const ciface:
   qualifier.FromDevice(&device);
   SetDefaultDevice(qualifier);
 
-  // Buttons
+  // Buttons where they are on the GameCube controller (B left of A, X right of it), except on the
+  // handheld's own gamepad, which reports the Nintendo layout and keeps its labels.
+  const bool built_in = device.GetName() == InputCommon::BUILT_IN_GAMEPAD;
   m_buttons->SetControlExpression(0, any_of({"Button A"}));
-  m_buttons->SetControlExpression(1, any_of({"Button B"}));
-  m_buttons->SetControlExpression(2, any_of({"Button X"}));
+  m_buttons->SetControlExpression(1, any_of({built_in ? "Button B" : "Button X"}));
+  m_buttons->SetControlExpression(2, any_of({built_in ? "Button X" : "Button B"}));
   m_buttons->SetControlExpression(3, any_of({"Button Y"}));
   m_buttons->SetControlExpression(4, any_of({"Button R1"}));  // Z
   m_buttons->SetControlExpression(5, any_of({"Start"}));

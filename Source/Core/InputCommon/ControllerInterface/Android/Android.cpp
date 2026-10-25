@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -58,6 +59,7 @@ jmethodID s_input_event_get_device_id;
 jclass s_key_event_class;
 jmethodID s_key_event_get_action;
 jmethodID s_key_event_get_keycode;
+jmethodID s_key_event_get_repeat_count;
 
 jclass s_motion_event_class;
 jmethodID s_motion_event_get_axis_value;
@@ -485,6 +487,31 @@ std::unique_ptr<ciface::InputBackend> CreateInputBackend(ControllerInterface* co
   return std::make_unique<InputBackend>(controller_interface);
 }
 
+static std::mutex s_button_press_mutex;
+static std::function<bool(const Core::Device&)> s_button_press_callback;
+
+void SetButtonPressCallback(std::function<bool(const Core::Device&)> callback)
+{
+  std::lock_guard lk(s_button_press_mutex);
+  s_button_press_callback = std::move(callback);
+}
+
+// The face, shoulder, stick and start/select buttons and the D-pad, but not Back or Mode, which
+// drive the app.
+static bool IsGamepadButton(int keycode)
+{
+  return (keycode >= AKEYCODE_DPAD_UP && keycode <= AKEYCODE_DPAD_RIGHT) ||
+         (keycode >= AKEYCODE_BUTTON_A && keycode <= AKEYCODE_BUTTON_SELECT);
+}
+
+static bool OnButtonPress(const Core::Device& device, int keycode)
+{
+  if (!IsGamepadButton(keycode))
+    return false;
+  std::lock_guard lk(s_button_press_mutex);
+  return s_button_press_callback && s_button_press_callback(device);
+}
+
 class AndroidInput : public Core::Device::Input
 {
 public:
@@ -873,6 +900,7 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
   s_key_event_class = reinterpret_cast<jclass>(env->NewGlobalRef(key_event_class));
   s_key_event_get_action = env->GetMethodID(s_key_event_class, "getAction", "()I");
   s_key_event_get_keycode = env->GetMethodID(s_key_event_class, "getKeyCode", "()I");
+  s_key_event_get_repeat_count = env->GetMethodID(s_key_event_class, "getRepeatCount", "()I");
   env->DeleteLocalRef(key_event_class);
 
   const jclass motion_event_class = env->FindClass("android/view/MotionEvent");
@@ -1090,6 +1118,13 @@ Java_org_dolphinemu_dolphinemu_features_input_model_ControllerInterface_dispatch
 
   DEBUG_LOG_FMT(CONTROLLERINTERFACE, "Set {} of {} to {}", input_name, device->GetQualifiedName(),
                 state);
+
+  if (action == AKEY_EVENT_ACTION_DOWN &&
+      env->CallIntMethod(key_event, s_key_event_get_repeat_count) == 0 &&
+      ciface::Android::OnButtonPress(*device, keycode))
+  {
+    return JNI_TRUE;
+  }
 
   return last_polled >= Clock::now() - ACTIVE_INPUT_TIMEOUT;
 }

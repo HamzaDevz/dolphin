@@ -4,9 +4,13 @@
 #include "Core/HW/GCPad.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
@@ -21,6 +25,10 @@
 #include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
+#ifdef ANDROID
+#include "InputCommon/ControllerInterface/Android/Android.h"
+#endif
+#include "InputCommon/GCAdapter.h"
 #include "InputCommon/GCPadStatus.h"
 #include "InputCommon/GamepadAutoAssign.h"
 #include "InputCommon/InputConfig.h"
@@ -35,36 +43,74 @@ InputConfig* GetConfig()
 }
 
 #ifdef ANDROID
-static Common::EventHook s_gamepad_hotplug_hook;
-static std::mutex s_gamepads_mutex;
-static InputCommon::GamepadHotplug s_hotplug;
+static constexpr int PORT_COUNT = 4;
+static constexpr u16 ADAPTER_BUTTONS =
+    PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT | PAD_BUTTON_DOWN | PAD_BUTTON_UP | PAD_TRIGGER_Z |
+    PAD_TRIGGER_R | PAD_TRIGGER_L | PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y |
+    PAD_BUTTON_START;
 
-// The connected gamepads (Android gives them a controller number), in player order.
-static std::vector<std::shared_ptr<ciface::Core::Device>> GetGamepads()
+static Common::EventHook s_gamepad_hotplug_hook;
+static std::mutex s_players_mutex;
+static InputCommon::GamepadPlayers s_players(PORT_COUNT);
+static InputCommon::GamepadHotplug s_hotplug;
+// Players join only while a game runs.
+static bool s_players_enabled = false;
+// The ports whose player changed, applied from the pad polling.
+static u8 s_changed_ports = 0;
+// The ports of the GameCube adapter with a controller plugged in, and with a button down.
+static u8 s_adapter_connected = 0;
+static u8 s_adapter_pressed = 0;
+static std::atomic<bool> s_undocked = false;
+// The port of the GameCube adapter each player plays on, or -1.
+static std::array<std::atomic<int>, PORT_COUNT> s_adapter_channel = {-1, -1, -1, -1};
+static std::array<std::atomic<bool>, PORT_COUNT> s_adapter_send_origin = {};
+
+static std::string AdapterGamepad(int chan)
 {
-  std::vector<std::shared_ptr<ciface::Core::Device>> gamepads;
+  return fmt::format("GCAdapter/{}/GameCube Controller", chan);
+}
+
+static std::optional<int> GetAdapterChannel(std::string_view gamepad)
+{
+  for (int chan = 0; chan < PORT_COUNT; ++chan)
+  {
+    if (gamepad == AdapterGamepad(chan))
+      return chan;
+  }
+  return std::nullopt;
+}
+
+// The ports that can take a player: those with a GameCube controller or with nothing plugged in.
+static std::vector<bool> GetPorts()
+{
+  std::vector<bool> ports;
+  for (int i = 0; i < PORT_COUNT; ++i)
+  {
+    const SerialInterface::SIDevices type = Config::Get(Config::GetInfoForSIDevice(i));
+    ports.push_back(type == SerialInterface::SIDEVICE_GC_CONTROLLER ||
+                    type == SerialInterface::SIDEVICE_NONE);
+  }
+  return ports;
+}
+
+// The connected gamepads (Android gives them a controller number) and adapter controllers.
+static std::vector<std::string> GetConnectedGamepads()
+{
+  std::vector<std::string> gamepads;
   for (const std::string& name : g_controller_interface.GetAllDeviceStrings())
   {
     ciface::Core::DeviceQualifier qualifier;
     qualifier.FromString(name);
-    auto device = g_controller_interface.FindDevice(qualifier);
+    const auto device = g_controller_interface.FindDevice(qualifier);
     if (device && device->GetPreferredId())
-      gamepads.push_back(std::move(device));
+      gamepads.push_back(name);
   }
-  std::ranges::stable_sort(gamepads, {}, [](const auto& device) { return device->GetId(); });
-  return gamepads;
-}
-
-static std::vector<std::string> GetNames(const std::vector<std::shared_ptr<ciface::Core::Device>>& devices)
-{
-  std::vector<std::string> names;
-  for (const auto& device : devices)
+  for (int chan = 0; chan < PORT_COUNT; ++chan)
   {
-    ciface::Core::DeviceQualifier qualifier;
-    qualifier.FromDevice(device.get());
-    names.push_back(qualifier.ToString());
+    if (s_adapter_connected & (1 << chan))
+      gamepads.push_back(AdapterGamepad(chan));
   }
-  return names;
+  return gamepads;
 }
 
 static bool HasInputMapped(const ControllerEmu::EmulatedController& controller)
@@ -76,74 +122,175 @@ static bool HasInputMapped(const ControllerEmu::EmulatedController& controller)
   });
 }
 
-static void AssignGamepads(const std::vector<std::string>* new_gamepads)
+// Maps the port to its player's gamepad. A free port reads as unplugged.
+static void ApplyPlayer(int port)
 {
-  const auto gamepads = GetGamepads();
-  const auto gamepad_names = GetNames(gamepads);
-  const auto connected = g_controller_interface.GetAllDeviceStrings();
+  const std::string& gamepad = s_players.GetGamepad(port);
+  const std::optional<int> chan = GetAdapterChannel(gamepad);
+  s_adapter_channel[port] = chan.value_or(-1);
+  s_adapter_send_origin[port] = chan.has_value();
 
+  std::shared_ptr<ciface::Core::Device> device;
+  if (!gamepad.empty() && !chan)
+  {
+    ciface::Core::DeviceQualifier qualifier;
+    qualifier.FromString(gamepad);
+    device = g_controller_interface.FindDevice(qualifier);
+  }
+
+  auto* pad = static_cast<GCPad*>(s_config.GetController(port));
+  // Keep a mapping made for a gamepad of the same kind (same source and name, another number).
+  if (device && HasInputMapped(*pad) &&
+      InputCommon::IsSameKindOfGamepad(pad->GetDefaultDevice().ToString(), gamepad))
+  {
+    pad->SetDefaultDevice(gamepad);
+  }
+  else if (device)
+  {
+    pad->LoadGamepadDefaults(g_controller_interface, *device);
+  }
+  else
+  {
+    pad->SetDefaultDevice(ciface::Core::DeviceQualifier{});
+  }
+  pad->UpdateReferences(g_controller_interface);
+
+  if (gamepad.empty())
+  {
+    INFO_LOG_FMT(SERIALINTERFACE, "Player {} is free", port + 1);
+    return;
+  }
+
+  // Plug in a controller for this game only, like on the console.
+  if (Config::Get(Config::GetInfoForSIDevice(port)) == SerialInterface::SIDEVICE_NONE)
+  {
+    Config::SetCurrent(Config::GetInfoForSIDevice(port), SerialInterface::SIDEVICE_GC_CONTROLLER);
+  }
+
+  const std::string name = device ? device->GetName() : "GameCube Controller";
+  INFO_LOG_FMT(SERIALINTERFACE, "Gamepad {} is player {}", gamepad, port + 1);
+  OSD::AddMessage(fmt::format("Player {}: {}", port + 1, name), OSD::Duration::NORMAL);
+}
+
+static void ApplyChangedPlayers()
+{
+  if (!s_changed_ports)
+    return;
   const auto lock = ControllerEmu::EmulatedController::GetStateLock();
-  std::vector<InputCommon::GamepadPort> ports;
-  for (int i = 0; i < 4; ++i)
+  for (int port = 0; port < PORT_COUNT; ++port)
   {
-    const auto* pad = s_config.GetController(i);
-    const SerialInterface::SIDevices type = Config::Get(Config::GetInfoForSIDevice(i));
-    ports.push_back({type == SerialInterface::SIDEVICE_GC_CONTROLLER, HasInputMapped(*pad),
-                     pad->GetDefaultDevice().ToString(), type == SerialInterface::SIDEVICE_NONE});
+    if (s_changed_ports & (1 << port))
+      ApplyPlayer(port);
   }
+  s_changed_ports = 0;
+}
 
-  for (const auto& assignment :
-       InputCommon::PlanGamepadAssignment(ports, connected, gamepad_names, new_gamepads))
-  {
-    const auto it = std::ranges::find(gamepad_names, assignment.device);
-    const auto& device = gamepads[it - gamepad_names.begin()];
-    auto* pad = static_cast<GCPad*>(s_config.GetController(assignment.port));
-    if (assignment.keep_mapping)
-      pad->SetDefaultDevice(assignment.device);
-    else
-      pad->LoadGamepadDefaults(g_controller_interface, *device);
-    pad->UpdateReferences(g_controller_interface);
+static void RefreshPlayers(bool undocked)
+{
+  for (const int port : s_players.Refresh(GetConnectedGamepads(), GetPorts(), undocked))
+    s_changed_ports |= 1 << port;
+}
 
-    // Plug in a controller for this game only, like on the console.
-    if (!ports[assignment.port].active)
-    {
-      Config::SetCurrent(Config::GetInfoForSIDevice(assignment.port),
-                         SerialInterface::SIDEVICE_GC_CONTROLLER);
-    }
+// A gamepad that plays as no one joins when one of its buttons goes down.
+static bool OnGamepadButtonPress(const ciface::Core::Device& device)
+{
+  if (!device.GetPreferredId())
+    return false;
+  ciface::Core::DeviceQualifier qualifier;
+  qualifier.FromDevice(&device);
 
-    INFO_LOG_FMT(SERIALINTERFACE, "Gamepad {} is player {}", assignment.device,
-                 assignment.port + 1);
-    OSD::AddMessage(fmt::format("Player {}: {}", assignment.port + 1, device->GetName()),
-                    OSD::Duration::NORMAL);
-  }
+  std::lock_guard lk(s_players_mutex);
+  if (!s_players_enabled)
+    return false;
+  const std::optional<int> port = s_players.Join(qualifier.ToString(), GetPorts());
+  if (!port)
+    return false;
+  s_changed_ports |= 1 << *port;
+  return true;
 }
 
 void AutoAssignGamepads()
 {
-  std::lock_guard lk(s_gamepads_mutex);
-  s_hotplug.Reset(GetNames(GetGamepads()));
-  AssignGamepads(nullptr);
+  ciface::Android::SetButtonPressCallback(OnGamepadButtonPress);
+
+  std::lock_guard lk(s_players_mutex);
+  s_players_enabled = true;
+
+  // Players keep their gamepad from a game to the next, and every other port reads as unplugged.
+  RefreshPlayers(false);
+  const auto ports = GetPorts();
+  for (int port = 0; port < PORT_COUNT; ++port)
+  {
+    if (ports[port])
+      s_changed_ports |= 1 << port;
+  }
+  ApplyChangedPlayers();
+}
+
+void HandBackFirstPlayer()
+{
+  s_undocked = true;
 }
 
 static void OnDevicesChanged()
 {
-  std::lock_guard lk(s_gamepads_mutex);
+  std::lock_guard lk(s_players_mutex);
   s_hotplug.DevicesChanged(InputCommon::GamepadHotplug::Clock::now());
 }
 
-// A gamepad connected during a game takes the next free port, once the devices have settled.
-// Done from the pad polling, so only while a game runs.
-static void AssignConnectedGamepads()
+// Done from the pad polling, so only while a game runs: frees the players whose gamepad went away
+// once the devices have settled, and lets the adapter controllers join on a button press.
+static void UpdatePlayers()
 {
-  std::lock_guard lk(s_gamepads_mutex);
-  if (!s_hotplug.IsSettled(InputCommon::GamepadHotplug::Clock::now()))
+  std::lock_guard lk(s_players_mutex);
+  if (!s_players_enabled)
     return;
-  const auto added = s_hotplug.TakeNewGamepads(GetNames(GetGamepads()));
-  if (!added.empty())
-    AssignGamepads(&added);
+
+  u8 adapter_connected = 0;
+  u8 adapter_pressed = 0;
+  if (GCAdapter::IsDetected(nullptr))
+  {
+    for (int chan = 0; chan < PORT_COUNT; ++chan)
+    {
+      if (!GCAdapter::DeviceConnected(chan))
+        continue;
+      adapter_connected |= 1 << chan;
+      if (GCAdapter::PeekInput(chan).button & ADAPTER_BUTTONS)
+        adapter_pressed |= 1 << chan;
+    }
+  }
+
+  const bool undocked = s_undocked.exchange(false);
+  const bool adapter_changed = adapter_connected != s_adapter_connected;
+  s_adapter_connected = adapter_connected;
+  if (s_hotplug.TakeSettled(InputCommon::GamepadHotplug::Clock::now()) || adapter_changed ||
+      undocked)
+  {
+    RefreshPlayers(undocked);
+  }
+
+  const u8 new_presses = adapter_pressed & ~s_adapter_pressed;
+  s_adapter_pressed = adapter_pressed;
+  if (new_presses)
+  {
+    const auto ports = GetPorts();
+    for (int chan = 0; chan < PORT_COUNT; ++chan)
+    {
+      if (!(new_presses & (1 << chan)))
+        continue;
+      if (const std::optional<int> port = s_players.Join(AdapterGamepad(chan), ports))
+        s_changed_ports |= 1 << *port;
+    }
+  }
+
+  ApplyChangedPlayers();
 }
 #else
 void AutoAssignGamepads()
+{
+}
+
+void HandBackFirstPlayer()
 {
 }
 #endif
@@ -151,6 +298,11 @@ void AutoAssignGamepads()
 void Shutdown()
 {
 #ifdef ANDROID
+  ciface::Android::SetButtonPressCallback(nullptr);
+  {
+    std::lock_guard lk(s_players_mutex);
+    s_players_enabled = false;
+  }
   s_gamepad_hotplug_hook.reset();
 #endif
   s_config.UnregisterHotplugCallback();
@@ -193,7 +345,12 @@ bool IsInitialized()
 GCPadStatus GetStatus(int pad_num)
 {
 #ifdef ANDROID
-  AssignConnectedGamepads();
+  UpdatePlayers();
+  if (const int chan = s_adapter_channel[pad_num]; chan >= 0)
+  {
+    return s_adapter_send_origin[pad_num].exchange(false) ? GCAdapter::GetOrigin(chan) :
+                                                            GCAdapter::PeekInput(chan);
+  }
 #endif
   return static_cast<GCPad*>(s_config.GetController(pad_num))->GetInput();
 }
@@ -205,11 +362,25 @@ ControllerEmu::ControlGroup* GetGroup(int pad_num, PadGroup group)
 
 void Rumble(const int pad_num, const ControlState strength)
 {
+#ifdef ANDROID
+  if (const int chan = s_adapter_channel[pad_num]; chan >= 0)
+  {
+    GCAdapter::Output(chan, static_cast<u8>(strength));
+    return;
+  }
+#endif
   static_cast<GCPad*>(s_config.GetController(pad_num))->SetOutput(strength);
 }
 
 void ResetRumble(const int pad_num)
 {
+#ifdef ANDROID
+  if (const int chan = s_adapter_channel[pad_num]; chan >= 0)
+  {
+    GCAdapter::Output(chan, 0);
+    return;
+  }
+#endif
   static_cast<GCPad*>(s_config.GetController(pad_num))->SetOutput(0.0);
 }
 

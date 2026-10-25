@@ -4,7 +4,6 @@
 #include "InputCommon/GamepadAutoAssign.h"
 
 #include <algorithm>
-#include <string_view>
 #include <utility>
 
 namespace InputCommon
@@ -16,61 +15,99 @@ bool Contains(const std::vector<std::string>& list, const std::string& value)
   return std::ranges::find(list, value) != list.end();
 }
 
-// "Android/2/Wireless Controller" and "Android/3/Wireless Controller" are the same kind of gamepad.
-bool SameKind(std::string_view a, std::string_view b)
+// The source and the name of "Source/Id/Name", without the id.
+std::optional<std::pair<std::string_view, std::string_view>> SplitQualifier(std::string_view gamepad)
 {
-  const auto source_a = a.find('/'), source_b = b.find('/');
-  if (source_a == std::string_view::npos || source_b == std::string_view::npos)
-    return false;
-  const auto name_a = a.find('/', source_a + 1), name_b = b.find('/', source_b + 1);
-  if (name_a == std::string_view::npos || name_b == std::string_view::npos)
-    return false;
-  return a.substr(0, source_a) == b.substr(0, source_b) && a.substr(name_a) == b.substr(name_b);
+  const auto source_end = gamepad.find('/');
+  if (source_end == std::string_view::npos)
+    return std::nullopt;
+  const auto id_end = gamepad.find('/', source_end + 1);
+  if (id_end == std::string_view::npos)
+    return std::nullopt;
+  return std::make_pair(gamepad.substr(0, source_end), gamepad.substr(id_end + 1));
 }
 }  // namespace
 
-std::vector<GamepadAssignment> PlanGamepadAssignment(const std::vector<GamepadPort>& ports,
-                                                     const std::vector<std::string>& connected,
-                                                     const std::vector<std::string>& gamepads,
-                                                     const std::vector<std::string>* new_gamepads)
+bool IsBuiltInGamepad(std::string_view gamepad)
 {
-  std::vector<std::string> used;
-  std::vector<int> without_device;
-  for (int i = 0; i < static_cast<int>(ports.size()); ++i)
-  {
-    const GamepadPort& port = ports[i];
-    if (!port.active)
-    {
-      if (port.pluggable)
-        without_device.push_back(i);
-      continue;
-    }
-    if (port.mapped && Contains(connected, port.device) && !Contains(used, port.device))
-      used.push_back(port.device);
-    else
-      without_device.push_back(i);
-  }
-
-  std::vector<GamepadAssignment> plan;
-  auto port = without_device.begin();
-  for (const std::string& gamepad : gamepads)
-  {
-    if (port == without_device.end())
-      break;
-    if (Contains(used, gamepad) || (new_gamepads && !Contains(*new_gamepads, gamepad)))
-      continue;
-    const GamepadPort& p = ports[*port];
-    plan.push_back({*port, gamepad, p.mapped && SameKind(p.device, gamepad)});
-    used.push_back(gamepad);
-    ++port;
-  }
-  return plan;
+  const auto parts = SplitQualifier(gamepad);
+  return parts && parts->first == "Android" && parts->second == BUILT_IN_GAMEPAD;
 }
 
-void GamepadHotplug::Reset(std::vector<std::string> gamepads)
+bool IsSameKindOfGamepad(std::string_view a, std::string_view b)
 {
-  m_known = std::move(gamepads);
-  m_changed_at.reset();
+  const auto parts_a = SplitQualifier(a);
+  return parts_a && parts_a == SplitQualifier(b);
+}
+
+GamepadPlayers::GamepadPlayers(int port_count) : m_gamepads(port_count)
+{
+}
+
+std::optional<int> GamepadPlayers::Join(const std::string& gamepad, const std::vector<bool>& ports)
+{
+  if (Contains(m_gamepads, gamepad))
+    return std::nullopt;
+
+  const int count = static_cast<int>(m_gamepads.size());
+  const bool built_in = IsBuiltInGamepad(gamepad);
+  std::optional<int> port;
+  if (built_in && ports[0] &&
+      std::all_of(m_gamepads.begin() + 1, m_gamepads.end(), [](const auto& g) { return g.empty(); }))
+  {
+    port = 0;
+  }
+  else
+  {
+    for (int i = 0; i < count; ++i)
+    {
+      const std::string& holder = m_gamepads[i];
+      if (ports[i] && (holder.empty() || (IsBuiltInGamepad(holder) && !built_in)))
+      {
+        port = i;
+        break;
+      }
+    }
+  }
+
+  if (port)
+    m_gamepads[*port] = gamepad;
+  return port;
+}
+
+std::vector<int> GamepadPlayers::Refresh(const std::vector<std::string>& connected,
+                                         const std::vector<bool>& ports, bool undocked)
+{
+  std::vector<int> changed;
+  for (int i = 0; i < static_cast<int>(m_gamepads.size()); ++i)
+  {
+    if (!m_gamepads[i].empty() && (!ports[i] || !Contains(connected, m_gamepads[i])))
+    {
+      m_gamepads[i].clear();
+      changed.push_back(i);
+    }
+  }
+
+  const auto built_in = std::ranges::find_if(connected, IsBuiltInGamepad);
+  if (ports[0] && built_in != connected.end() && (undocked || m_gamepads[0].empty()) &&
+      m_gamepads[0] != *built_in)
+  {
+    const auto other = std::ranges::find(m_gamepads, *built_in);
+    if (other != m_gamepads.end())
+    {
+      other->clear();
+      changed.push_back(static_cast<int>(other - m_gamepads.begin()));
+    }
+    m_gamepads[0] = *built_in;
+    if (std::ranges::find(changed, 0) == changed.end())
+      changed.push_back(0);
+  }
+  return changed;
+}
+
+const std::string& GamepadPlayers::GetGamepad(int port) const
+{
+  return m_gamepads[port];
 }
 
 void GamepadHotplug::DevicesChanged(Clock::time_point now)
@@ -78,20 +115,11 @@ void GamepadHotplug::DevicesChanged(Clock::time_point now)
   m_changed_at = now;
 }
 
-bool GamepadHotplug::IsSettled(Clock::time_point now) const
+bool GamepadHotplug::TakeSettled(Clock::time_point now)
 {
-  return m_changed_at && now - *m_changed_at >= SETTLE_TIME;
-}
-
-std::vector<std::string> GamepadHotplug::TakeNewGamepads(const std::vector<std::string>& gamepads)
-{
-  std::vector<std::string> added;
-  for (const std::string& gamepad : gamepads)
-  {
-    if (!Contains(m_known, gamepad))
-      added.push_back(gamepad);
-  }
-  Reset(gamepads);
-  return added;
+  if (!m_changed_at || now - *m_changed_at < SETTLE_TIME)
+    return false;
+  m_changed_at.reset();
+  return true;
 }
 }  // namespace InputCommon

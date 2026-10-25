@@ -19,6 +19,10 @@ void SetAdapterCallback(std::function<void(void)> func);
 // Buttons have PAD_GET_ORIGIN set on new connection
 // Netplay and CSIDevice_GCAdapter make use of this.
 GCPadStatus Input(int chan);
+// The state of the controller on the port, without taking the origin of a new connection.
+GCPadStatus PeekInput(int chan);
+// The state of the controller on the port when it was plugged in, with PAD_GET_ORIGIN set.
+GCPadStatus GetOrigin(int chan);
 
 void Output(int chan, u8 rumble_command);
 bool IsDetected(const char** error_message);

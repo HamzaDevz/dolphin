@@ -521,8 +521,12 @@ static void RefreshConfig()
 
   for (int i = 0; i < SerialInterface::MAX_SI_CHANNELS; ++i)
   {
-    is_adapter_wanted |= Config::Get(Config::GetInfoForSIDevice(i)) ==
-                         SerialInterface::SIDevices::SIDEVICE_WIIU_ADAPTER;
+    const SerialInterface::SIDevices device = Config::Get(Config::GetInfoForSIDevice(i));
+    is_adapter_wanted |= device == SerialInterface::SIDevices::SIDEVICE_WIIU_ADAPTER;
+#ifdef ANDROID
+    // The controllers plugged into the adapter join as players like any gamepad (Pad::GetStatus)
+    is_adapter_wanted |= device == SerialInterface::SIDevices::SIDEVICE_GC_CONTROLLER;
+#endif
     s_config_rumble_enabled[i].store(Config::Get(Config::GetInfoForAdapterRumble(i)),
                                      std::memory_order_relaxed);
   }
@@ -856,6 +860,29 @@ GCPadStatus Input(int chan)
   }
 
   return pad_state.status;
+}
+
+GCPadStatus PeekInput(int chan)
+{
+  if (!s_is_adapter_wanted.load(std::memory_order_relaxed))
+    return {};
+
+#if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
+  if (s_handle == nullptr || s_status != AdapterStatus::Detected)
+    return {};
+#elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
+  if (!s_detected || !s_fd)
+    return {};
+#endif
+
+  std::lock_guard lk(s_read_mutex);
+  return s_port_states[chan].status;
+}
+
+GCPadStatus GetOrigin(int chan)
+{
+  std::lock_guard lk(s_read_mutex);
+  return s_port_states[chan].origin;
 }
 
 // Get ControllerType from first byte in input payload.

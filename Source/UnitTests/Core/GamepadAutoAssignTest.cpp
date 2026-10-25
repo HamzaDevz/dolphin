@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -9,195 +10,168 @@
 
 #include "InputCommon/GamepadAutoAssign.h"
 
-using InputCommon::GamepadAssignment;
 using InputCommon::GamepadHotplug;
-using InputCommon::GamepadPort;
-using InputCommon::PlanGamepadAssignment;
+using InputCommon::GamepadPlayers;
 
 namespace
 {
 const std::string ODIN = "Android/1/Odin Controller";
-const std::string PAD2 = "Android/2/Wireless Controller";
-const std::string PAD3 = "Android/3/Wireless Controller";
-const std::string XBOX3 = "Android/3/Xbox Wireless Controller";
-const std::string SENSORS = "Android/0/Device Sensors";
-const std::string KEYBOARD = "Android/0/Keyboard";
+const std::string XBOX = "Android/2/Xbox Wireless Controller";
+const std::string DS4 = "Android/3/Wireless Controller";
+const std::string LIC = "Android/4/Lic Pro Controller";
+const std::string ADAPTER = "GCAdapter/0/GameCube Controller";
+const std::vector<bool> ALL_PORTS = {true, true, true, true};
 
-std::vector<GamepadAssignment> Plan(const std::vector<GamepadPort>& ports,
-                                    const std::vector<std::string>& gamepads,
-                                    const std::vector<std::string>* new_gamepads = nullptr)
+std::vector<std::string> Players(const GamepadPlayers& players)
 {
-  std::vector<std::string> connected = gamepads;
-  connected.push_back(SENSORS);
-  return PlanGamepadAssignment(ports, connected, gamepads, new_gamepads);
+  return {players.GetGamepad(0), players.GetGamepad(1), players.GetGamepad(2),
+          players.GetGamepad(3)};
 }
 
-void ExpectAssigned(const GamepadAssignment& a, int port, const std::string& device, bool keep)
+// The Odin alone, as when a game starts.
+GamepadPlayers OdinAlone()
 {
-  EXPECT_EQ(a.port, port);
-  EXPECT_EQ(a.device, device);
-  EXPECT_EQ(a.keep_mapping, keep);
+  GamepadPlayers players(4);
+  players.Refresh({ODIN}, ALL_PORTS, false);
+  return players;
 }
 }  // namespace
 
-// The Odin 3 config found on the console: port 1 mapped to the built-in controller, port 2 points to
-// a PS4 pad but has no binding, port 3 points to the Odin with no binding, port 4 is unplugged.
-TEST(GamepadAutoAssign, FillsEmptyPortsWithFreeGamepads)
+TEST(GamepadPlayers, TheOdinAloneIsPlayerOne)
 {
-  const auto plan = Plan({{true, true, ODIN}, {true, false, PAD2}, {true, false, ODIN}, {false, false, ODIN}},
-                         {ODIN, PAD2, PAD3});
-  ASSERT_EQ(plan.size(), 2u);
-  ExpectAssigned(plan[0], 1, PAD2, false);
-  ExpectAssigned(plan[1], 2, PAD3, false);
+  const GamepadPlayers players = OdinAlone();
+  EXPECT_EQ(Players(players), (std::vector<std::string>{ODIN, "", "", ""}));
 }
 
-TEST(GamepadAutoAssign, KeepsMappedConnectedPorts)
+TEST(GamepadPlayers, AGamepadTakesPlayerOneFromTheOdin)
 {
-  EXPECT_TRUE(Plan({{true, true, ODIN}, {true, true, PAD2}}, {ODIN, PAD2, PAD3}).empty());
+  GamepadPlayers players = OdinAlone();
+  EXPECT_EQ(players.Join(XBOX, ALL_PORTS), 0);
+  EXPECT_EQ(Players(players), (std::vector<std::string>{XBOX, "", "", ""}));
 }
 
-// A game profile that maps port 2 to the same pad as port 1 (Mario Kart Wii on the console).
-TEST(GamepadAutoAssign, MovesADuplicatePortToAFreeGamepad)
+TEST(GamepadPlayers, TheNextGamepadsTakeTheNextPlayers)
 {
-  const auto plan = Plan({{true, true, ODIN}, {true, true, ODIN}}, {ODIN, PAD2});
-  ASSERT_EQ(plan.size(), 1u);
-  ExpectAssigned(plan[0], 1, PAD2, false);
+  GamepadPlayers players = OdinAlone();
+  EXPECT_EQ(players.Join(XBOX, ALL_PORTS), 0);
+  EXPECT_EQ(players.Join(DS4, ALL_PORTS), 1);
+  EXPECT_EQ(players.Join(ADAPTER, ALL_PORTS), 2);
+  EXPECT_EQ(players.Join(LIC, ALL_PORTS), 3);
+  EXPECT_EQ(players.Join("Android/5/Other", ALL_PORTS), std::nullopt);
 }
 
-TEST(GamepadAutoAssign, LeavesADuplicateAloneWithoutAFreeGamepad)
+TEST(GamepadPlayers, AGamepadThatPlaysDoesNotMove)
 {
-  EXPECT_TRUE(Plan({{true, true, ODIN}, {true, true, ODIN}}, {ODIN}).empty());
+  GamepadPlayers players = OdinAlone();
+  EXPECT_EQ(players.Join(ODIN, ALL_PORTS), std::nullopt);
+  players.Join(XBOX, ALL_PORTS);
+  EXPECT_EQ(players.Join(XBOX, ALL_PORTS), std::nullopt);
+  EXPECT_EQ(Players(players), (std::vector<std::string>{XBOX, "", "", ""}));
 }
 
-// The PS4 pad mapped as "2" came back as "3": keep its custom mapping.
-TEST(GamepadAutoAssign, RetargetsAMappingToTheSameKindOfGamepad)
+TEST(GamepadPlayers, TheOdinTakesPlayerOneBackWhenNoOneElsePlays)
 {
-  const auto plan = Plan({{true, true, ODIN}, {true, true, PAD2}}, {ODIN, PAD3});
-  ASSERT_EQ(plan.size(), 1u);
-  ExpectAssigned(plan[0], 1, PAD3, true);
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  EXPECT_EQ(players.Join(ODIN, ALL_PORTS), 0);
+  EXPECT_EQ(Players(players), (std::vector<std::string>{ODIN, "", "", ""}));
 }
 
-TEST(GamepadAutoAssign, RemapsForAnotherKindOfGamepad)
+TEST(GamepadPlayers, TheOdinJoinsAfterTheOthers)
 {
-  const auto plan = Plan({{true, true, ODIN}, {true, true, PAD2}}, {ODIN, XBOX3});
-  ASSERT_EQ(plan.size(), 1u);
-  ExpectAssigned(plan[0], 1, XBOX3, false);
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  EXPECT_EQ(players.Join(ODIN, ALL_PORTS), 2);
 }
 
-TEST(GamepadAutoAssign, IgnoresInactivePorts)
+TEST(GamepadPlayers, AGamepadTakesTheOdinsPlayerAfterTheOthers)
 {
-  EXPECT_TRUE(Plan({{true, true, ODIN}, {false, false, ""}}, {ODIN, PAD2}).empty());
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  players.Join(ODIN, ALL_PORTS);
+  EXPECT_EQ(players.Join(ADAPTER, ALL_PORTS), 2);
+  EXPECT_EQ(players.Join(LIC, ALL_PORTS), 3);
+  EXPECT_EQ(Players(players), (std::vector<std::string>{XBOX, DS4, ADAPTER, LIC}));
 }
 
-// A game setting that unplugs port 2 (Mario Kart Wii on the console) must not leave a gamepad out.
-TEST(GamepadAutoAssign, PlugsEmptyPortsForExtraGamepads)
+TEST(GamepadPlayers, SkipsPortsThatTakeNoGamepad)
 {
-  const auto plan = Plan({{true, true, ODIN},
-                          {false, false, ODIN, true},
-                          {false, false, "", true},
-                          {false, false, "", false}},
-                         {ODIN, PAD2, PAD3, XBOX3});
-  ASSERT_EQ(plan.size(), 2u);
-  ExpectAssigned(plan[0], 1, PAD2, false);
-  ExpectAssigned(plan[1], 2, PAD3, false);
+  GamepadPlayers players(4);
+  const std::vector<bool> ports = {false, true, false, true};
+  EXPECT_EQ(players.Join(XBOX, ports), 1);
+  EXPECT_EQ(players.Join(DS4, ports), 3);
+  EXPECT_EQ(players.Join(ODIN, ports), std::nullopt);
 }
 
-TEST(GamepadAutoAssign, FillsPortsInPlayerOrder)
+TEST(GamepadPlayers, FreesThePlayersWhoseGamepadWentAway)
 {
-  const auto plan =
-      Plan({{true, true, ODIN}, {false, false, "", true}, {true, false, ""}}, {ODIN, PAD2, PAD3});
-  ASSERT_EQ(plan.size(), 2u);
-  ExpectAssigned(plan[0], 1, PAD2, false);
-  ExpectAssigned(plan[1], 2, PAD3, false);
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  players.Join(ADAPTER, ALL_PORTS);
+  EXPECT_EQ(players.Refresh({ODIN, XBOX, ADAPTER}, ALL_PORTS, false), (std::vector<int>{1}));
+  EXPECT_EQ(Players(players), (std::vector<std::string>{XBOX, "", ADAPTER, ""}));
+  EXPECT_EQ(players.Join(DS4, ALL_PORTS), 1);
 }
 
-TEST(GamepadAutoAssign, KeepsAPortMappedToAConnectedNonGamepad)
+TEST(GamepadPlayers, TheOdinTakesPlayerOneWhenItsGamepadWentAway)
 {
-  std::vector<std::string> connected = {ODIN, PAD2, KEYBOARD};
-  const std::vector<std::string> gamepads = {ODIN, PAD2};
-  EXPECT_TRUE(
-      PlanGamepadAssignment({{true, true, ODIN}, {true, true, KEYBOARD}}, connected, gamepads, nullptr)
-          .empty());
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  players.Join(ODIN, ALL_PORTS);
+  EXPECT_EQ(players.Refresh({ODIN, DS4}, ALL_PORTS, false), (std::vector<int>{0, 2}));
+  EXPECT_EQ(Players(players), (std::vector<std::string>{ODIN, DS4, "", ""}));
 }
 
-TEST(GamepadAutoAssign, FillsAnUnmappedPortWithNoDevice)
+TEST(GamepadPlayers, TheOdinTakesPlayerOneWhenItLeavesTheDock)
 {
-  const auto plan = Plan({{true, true, ODIN}, {true, false, ""}}, {ODIN, PAD2});
-  ASSERT_EQ(plan.size(), 1u);
-  ExpectAssigned(plan[0], 1, PAD2, false);
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  EXPECT_EQ(players.Refresh({ODIN, XBOX, DS4}, ALL_PORTS, false), (std::vector<int>{}));
+  EXPECT_EQ(players.Refresh({ODIN, XBOX, DS4}, ALL_PORTS, true), (std::vector<int>{0}));
+  EXPECT_EQ(Players(players), (std::vector<std::string>{ODIN, DS4, "", ""}));
 }
 
-// On hotplug only the gamepads that just appeared are handed out: a pad that reconnects
-// (Android removes and re-adds it) must not steal the port of another pad that is briefly away.
-TEST(GamepadAutoAssign, HotplugOnlyHandsOutNewGamepads)
+TEST(GamepadPlayers, FreesThePortsThatNoLongerTakeAGamepad)
 {
-  const std::vector<GamepadPort> ports = {{true, true, ODIN}, {true, true, PAD2}, {true, false, ""}};
-  const std::vector<std::string> none;
-  EXPECT_TRUE(Plan(ports, {ODIN, PAD3}, &none).empty());
-
-  const std::vector<std::string> pad3 = {PAD3};
-  const auto plan = Plan(ports, {ODIN, PAD3}, &pad3);
-  ASSERT_EQ(plan.size(), 1u);
-  ExpectAssigned(plan[0], 1, PAD3, true);
+  GamepadPlayers players = OdinAlone();
+  players.Join(XBOX, ALL_PORTS);
+  players.Join(DS4, ALL_PORTS);
+  EXPECT_EQ(players.Refresh({ODIN, XBOX, DS4}, {true, false, true, true}, false),
+            (std::vector<int>{1}));
 }
 
-TEST(GamepadAutoAssign, NeverGivesOneGamepadToTwoPorts)
+TEST(GamepadPlayers, NoOneIsPlayerOneWithoutTheOdin)
 {
-  const auto plan = Plan({{true, false, ""}, {true, false, ""}, {true, false, ""}}, {ODIN, PAD2});
-  ASSERT_EQ(plan.size(), 2u);
-  ExpectAssigned(plan[0], 0, ODIN, false);
-  ExpectAssigned(plan[1], 1, PAD2, false);
+  GamepadPlayers players(4);
+  EXPECT_EQ(players.Refresh({XBOX}, ALL_PORTS, false), (std::vector<int>{}));
+  EXPECT_EQ(players.Join(XBOX, ALL_PORTS), 0);
 }
 
-namespace
+TEST(GamepadPlayers, TellsGamepadsApart)
 {
-using namespace std::chrono_literals;
-const GamepadHotplug::Clock::time_point T0{};
-}  // namespace
+  EXPECT_TRUE(InputCommon::IsBuiltInGamepad(ODIN));
+  EXPECT_TRUE(InputCommon::IsBuiltInGamepad("Android/0/Odin Controller"));
+  EXPECT_FALSE(InputCommon::IsBuiltInGamepad(XBOX));
+  EXPECT_FALSE(InputCommon::IsBuiltInGamepad("Odin Controller"));
+  EXPECT_TRUE(InputCommon::IsSameKindOfGamepad(DS4, "Android/7/Wireless Controller"));
+  EXPECT_FALSE(InputCommon::IsSameKindOfGamepad(DS4, XBOX));
+  EXPECT_FALSE(InputCommon::IsSameKindOfGamepad("", ""));
+}
 
-TEST(GamepadHotplug, WaitsForTheDevicesToSettle)
+TEST(GamepadHotplug, SettlesOnceAfterTheDevicesStopChanging)
 {
+  using namespace std::chrono_literals;
   GamepadHotplug hotplug;
-  hotplug.Reset({ODIN});
-  EXPECT_FALSE(hotplug.IsSettled(T0));
-
-  hotplug.DevicesChanged(T0);
-  EXPECT_FALSE(hotplug.IsSettled(T0 + 100ms));
-  EXPECT_TRUE(hotplug.IsSettled(T0 + GamepadHotplug::SETTLE_TIME));
-  EXPECT_EQ(hotplug.TakeNewGamepads({ODIN, PAD2}), std::vector<std::string>{PAD2});
-  EXPECT_FALSE(hotplug.IsSettled(T0 + 1s));
-}
-
-// The Odin 3 hides every external gamepad behind its own copy, 85 ms after it connects: only the
-// copy is a new player.
-TEST(GamepadHotplug, SkipsAGamepadReplacedRightAway)
-{
-  GamepadHotplug hotplug;
-  hotplug.Reset({ODIN});
-  hotplug.DevicesChanged(T0);         // the gamepad
-  hotplug.DevicesChanged(T0 + 85ms);  // the Odin's copy
-  hotplug.DevicesChanged(T0 + 88ms);  // the gamepad, hidden
-  EXPECT_FALSE(hotplug.IsSettled(T0 + GamepadHotplug::SETTLE_TIME));
-  EXPECT_TRUE(hotplug.IsSettled(T0 + 88ms + GamepadHotplug::SETTLE_TIME));
-  EXPECT_EQ(hotplug.TakeNewGamepads({ODIN, PAD3}), std::vector<std::string>{PAD3});
-}
-
-TEST(GamepadHotplug, AReconnectedGamepadIsNotNew)
-{
-  GamepadHotplug hotplug;
-  hotplug.Reset({ODIN, PAD2});
-  hotplug.DevicesChanged(T0);
-  hotplug.DevicesChanged(T0 + 50ms);
-  EXPECT_TRUE(hotplug.IsSettled(T0 + 1s));
-  EXPECT_TRUE(hotplug.TakeNewGamepads({ODIN, PAD2}).empty());
-}
-
-TEST(GamepadHotplug, AGamepadBackAfterLeavingIsNew)
-{
-  GamepadHotplug hotplug;
-  hotplug.Reset({ODIN, PAD2});
-  hotplug.DevicesChanged(T0);
-  EXPECT_TRUE(hotplug.TakeNewGamepads({ODIN}).empty());
-  hotplug.DevicesChanged(T0 + 5s);
-  EXPECT_EQ(hotplug.TakeNewGamepads({ODIN, PAD2}), std::vector<std::string>{PAD2});
+  const auto t = GamepadHotplug::Clock::now();
+  EXPECT_FALSE(hotplug.TakeSettled(t));
+  hotplug.DevicesChanged(t);
+  hotplug.DevicesChanged(t + 90ms);
+  EXPECT_FALSE(hotplug.TakeSettled(t + 500ms));
+  EXPECT_TRUE(hotplug.TakeSettled(t + 590ms));
+  EXPECT_FALSE(hotplug.TakeSettled(t + 1s));
 }

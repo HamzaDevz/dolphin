@@ -20,8 +20,11 @@ namespace Pad
 void Shutdown();
 void Initialize();
 void LoadConfig();
-// Hands the connected gamepads to the controller ports that have none (Android).
+// Android: a gamepad that plays as no one joins as a player when one of its buttons goes down,
+// like on a Switch. Called when a game starts.
 void AutoAssignGamepads();
+// Android: gives player 1 back to the handheld's own gamepad, when it leaves its dock.
+void HandBackFirstPlayer();
 void GenerateDynamicInputTextures();
 bool IsInitialized();
 
