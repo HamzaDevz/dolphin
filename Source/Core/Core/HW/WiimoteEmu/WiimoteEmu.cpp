@@ -4,10 +4,12 @@
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include <fmt/format.h>
@@ -848,6 +850,32 @@ void Wiimote::LoadGamepadDefaults(const ControllerInterface& ciface,
   m_ir->SetControlExpression(3, any_of({fmt::format("Axis {}+", ir_x)}));
   m_ir->SetControlExpression(5, any_of({"Button R3"}));  // Recenter
 
+  // Tilting points too, with the gamepad's own gyroscope or, for the handheld's own gamepad, the
+  // handheld's.
+  std::optional<std::string> motion_device;
+  if (device.FindInput("Gyro Pitch Up"))
+    motion_device = "";
+  else if (device.GetName() == InputCommon::BUILT_IN_GAMEPAD)
+    motion_device = "Android/0/Device Sensors:";
+  if (motion_device)
+  {
+    static constexpr std::array<std::string_view, 6> accelerometer = {
+        "Accel Up", "Accel Down", "Accel Left", "Accel Right", "Accel Forward", "Accel Backward"};
+    static constexpr std::array<std::string_view, 6> gyroscope = {
+        "Gyro Pitch Up", "Gyro Pitch Down", "Gyro Roll Left",
+        "Gyro Roll Right", "Gyro Yaw Left", "Gyro Yaw Right"};
+    for (int i = 0; i < 6; ++i)
+    {
+      m_imu_accelerometer->SetControlExpression(i,
+                                                fmt::format("`{}{}`", *motion_device, accelerometer[i]));
+      m_imu_gyroscope->SetControlExpression(i, fmt::format("`{}{}`", *motion_device, gyroscope[i]));
+    }
+    m_imu_ir->SetControlExpression(0, any_of({"Button R3"}));  // Recenter
+    m_imu_ir->enabled.SetValue(true);
+    // Centered once the hands have settled, as when the handheld leaves its dock.
+    m_imu_recenter_steps = ::Wiimote::UPDATE_FREQ;
+  }
+
   if (device.FindOutput("Motor 0"))
     m_rumble->SetControlExpression(0, "`Motor 0`");
 
@@ -905,6 +933,12 @@ void Wiimote::StepDynamics()
   EmulateShake(&m_shake_state, m_shake, 1.f / ::Wiimote::UPDATE_FREQ);
   EmulateIMUCursor(&m_imu_cursor_state, m_imu_ir, m_imu_accelerometer, m_imu_gyroscope,
                    1.f / ::Wiimote::UPDATE_FREQ);
+
+  if (m_imu_recenter_steps > 0 && --m_imu_recenter_steps == 0)
+  {
+    m_imu_cursor_state.recentered_pitch = GetPitch(m_imu_cursor_state.rotation);
+    m_imu_cursor_state.rotation *= Common::Quaternion::RotateZ(-GetYaw(m_imu_cursor_state.rotation));
+  }
 }
 
 Common::Vec3 Wiimote::GetAcceleration(Common::Vec3 extra_acceleration) const

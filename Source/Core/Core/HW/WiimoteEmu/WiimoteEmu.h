@@ -350,6 +350,8 @@ private:
   PositionalState m_shake_state;
 
   IMUCursorState m_imu_cursor_state;
+  // Updates left before the pointer centers on how a gamepad with a gyroscope is held.
+  int m_imu_recenter_steps = 0;
 
   Config::ConfigChangedCallbackID m_config_changed_callback_id;
 };
