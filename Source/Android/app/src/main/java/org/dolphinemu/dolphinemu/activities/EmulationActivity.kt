@@ -1049,6 +1049,9 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
         private const val BACKSTACK_NAME_SUBMENU = "submenu"
 
         private var ignoreLaunchRequests = false
+        // The games being emulated, and the launch a frontend asked for while they ran.
+        private var runningPaths: Array<String>? = null
+        private var pendingLaunch: (() -> Unit)? = null
 
         var hasUserPausedEmulation = false
 
@@ -1124,10 +1127,24 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
 
         @JvmStatic
         fun launch(activity: FragmentActivity, filePaths: Array<String>, riivolution: Boolean, fromIntent: Boolean = false) {
-            if (ignoreLaunchRequests)
+            if (ignoreLaunchRequests) {
+                if (fromIntent)
+                    switchGame(activity, filePaths, riivolution)
                 return
+            }
 
             performLaunchChecks(activity, fromIntent) { launchWithoutChecks(activity, filePaths, riivolution) }
+        }
+
+        // A frontend asks for a game while the one it launched last still runs in the background:
+        // resume it if it is the same game, else end it and start the new one.
+        private fun switchGame(activity: FragmentActivity, filePaths: Array<String>, riivolution: Boolean) {
+            if (filePaths contentEquals runningPaths) {
+                performLaunchChecks(activity, true) { launchWithoutChecks(activity, filePaths, riivolution) }
+                return
+            }
+            pendingLaunch = { launch(activity, filePaths, riivolution, true) }
+            NativeLibrary.StopEmulation()
         }
 
         @JvmStatic
@@ -1140,6 +1157,7 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
             riivolution: Boolean
         ) {
             ignoreLaunchRequests = true
+            runningPaths = filePaths
             val launcher = Intent(activity, EmulationActivity::class.java)
             launcher.putExtra(EXTRA_SELECTED_GAMES, filePaths)
             launcher.putExtra(EXTRA_RIIVOLUTION, riivolution)
@@ -1217,7 +1235,12 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
 
         @JvmStatic
         fun stopIgnoringLaunchRequests() {
-            ignoreLaunchRequests = false
+            Handler(Looper.getMainLooper()).post {
+                ignoreLaunchRequests = false
+                runningPaths = null
+                pendingLaunch?.invoke()
+                pendingLaunch = null
+            }
         }
 
         private fun areCoordinatesOutside(view: View?, x: Float, y: Float): Boolean {
