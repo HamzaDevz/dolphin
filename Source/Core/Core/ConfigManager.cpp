@@ -305,6 +305,7 @@ void SConfig::OnESTitleChanged()
   {
     Wiimote::LoadConfig();
   }
+  Pad::ApplyPlayers();
 
   ReloadTextures(system);
 }

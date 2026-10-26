@@ -4,10 +4,16 @@
 #pragma once
 
 #include <chrono>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace ciface::Core
+{
+class Device;
+}
 
 namespace InputCommon
 {
@@ -18,6 +24,9 @@ constexpr std::string_view BUILT_IN_GAMEPAD = "Odin Controller";
 bool IsBuiltInGamepad(std::string_view gamepad);
 // "Android/2/Wireless Controller" and "Android/3/Wireless Controller" are the same kind of gamepad.
 bool IsSameKindOfGamepad(std::string_view a, std::string_view b);
+// The inputs of the device among the names, as one expression ("`Axis 22+` | `Button R2`").
+std::string AnyInputOf(const ciface::Core::Device& device,
+                       std::initializer_list<std::string_view> names);
 
 // Hands the emulated controller ports to gamepads the way a Switch does: a gamepad that plays as
 // no one joins on a button press, as player 1 if the handheld's own gamepad or no gamepad holds

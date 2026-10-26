@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <utility>
 
+#include <fmt/format.h>
+
+#include "InputCommon/ControllerInterface/CoreDevice.h"
+
 namespace InputCommon
 {
 namespace
@@ -38,6 +42,21 @@ bool IsSameKindOfGamepad(std::string_view a, std::string_view b)
 {
   const auto parts_a = SplitQualifier(a);
   return parts_a && parts_a == SplitQualifier(b);
+}
+
+std::string AnyInputOf(const ciface::Core::Device& device,
+                       std::initializer_list<std::string_view> names)
+{
+  std::string expression;
+  for (const std::string_view name : names)
+  {
+    if (!device.FindInput(name))
+      continue;
+    if (!expression.empty())
+      expression += " | ";
+    expression += fmt::format("`{}`", name);
+  }
+  return expression;
 }
 
 GamepadPlayers::GamepadPlayers(int port_count) : m_gamepads(port_count)

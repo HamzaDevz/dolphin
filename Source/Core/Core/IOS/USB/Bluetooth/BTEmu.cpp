@@ -14,6 +14,7 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/Debugger_SymbolMap.h"
+#include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/Wiimote.h"
@@ -308,6 +309,9 @@ void BluetoothEmuDevice::AddEventToQueue(const SQueuedEvent& event)
 
 void BluetoothEmuDevice::Update()
 {
+  // A Wii game may not read the GameCube ports, where players join and leave otherwise.
+  Pad::UpdatePlayers();
+
   // check HCI queue
   if (!m_event_queue.empty() && m_hci_endpoint)
   {

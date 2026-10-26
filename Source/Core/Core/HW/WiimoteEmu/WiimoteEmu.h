@@ -144,6 +144,8 @@ public:
   InputConfig* GetConfig() const override;
 
   void LoadDefaults(const ControllerInterface& ciface) override;
+  // Maps the Wii Remote and a Nunchuk to a gamepad held upright, the right stick pointing.
+  void LoadGamepadDefaults(const ControllerInterface& ciface, const ciface::Core::Device& device);
 
   ControllerEmu::ControlGroup* GetWiimoteGroup(WiimoteGroup group) const;
   ControllerEmu::ControlGroup* GetNunchukGroup(NunchukGroup group) const;

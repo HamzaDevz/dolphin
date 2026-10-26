@@ -19,8 +19,12 @@
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/WiimoteSettings.h"
 #include "Core/HW/GCPadEmu.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
+#include "Core/System.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
@@ -122,6 +126,22 @@ static bool HasInputMapped(const ControllerEmu::EmulatedController& controller)
   });
 }
 
+// In a Wii game the player also holds the Wii Remote of the same number, with a Nunchuk.
+static void ApplyWiimotePlayer(int port, const ciface::Core::Device* device)
+{
+  const auto& source = Config::GetInfoForWiimoteSource(port);
+  if (Config::Get(source) == WiimoteSource::Real)
+    return;
+
+  auto* wiimote = static_cast<WiimoteEmu::Wiimote*>(Wiimote::GetConfig()->GetController(port));
+  if (device)
+  {
+    wiimote->LoadGamepadDefaults(g_controller_interface, *device);
+    wiimote->UpdateReferences(g_controller_interface);
+  }
+  Config::SetCurrent(source, device ? WiimoteSource::Emulated : WiimoteSource::None);
+}
+
 // Maps the port to its player's gamepad. A free port reads as unplugged.
 static void ApplyPlayer(int port)
 {
@@ -155,6 +175,9 @@ static void ApplyPlayer(int port)
   }
   pad->UpdateReferences(g_controller_interface);
 
+  if (Core::System::GetInstance().IsWii())
+    ApplyWiimotePlayer(port, device.get());
+
   if (gamepad.empty())
   {
     INFO_LOG_FMT(SERIALINTERFACE, "Player {} is free", port + 1);
@@ -183,6 +206,18 @@ static void ApplyChangedPlayers()
       ApplyPlayer(port);
   }
   s_changed_ports = 0;
+}
+
+// Maps every port again, a free one as unplugged.
+static void ApplyAllPlayers()
+{
+  const auto ports = GetPorts();
+  for (int port = 0; port < PORT_COUNT; ++port)
+  {
+    if (ports[port])
+      s_changed_ports |= 1 << port;
+  }
+  ApplyChangedPlayers();
 }
 
 static void RefreshPlayers(bool undocked)
@@ -218,13 +253,14 @@ void AutoAssignGamepads()
 
   // Players keep their gamepad from a game to the next, and every other port reads as unplugged.
   RefreshPlayers(false);
-  const auto ports = GetPorts();
-  for (int port = 0; port < PORT_COUNT; ++port)
-  {
-    if (ports[port])
-      s_changed_ports |= 1 << port;
-  }
-  ApplyChangedPlayers();
+  ApplyAllPlayers();
+}
+
+void ApplyPlayers()
+{
+  std::lock_guard lk(s_players_mutex);
+  if (s_players_enabled)
+    ApplyAllPlayers();
 }
 
 void HandBackFirstPlayer()
@@ -238,9 +274,9 @@ static void OnDevicesChanged()
   s_hotplug.DevicesChanged(InputCommon::GamepadHotplug::Clock::now());
 }
 
-// Done from the pad polling, so only while a game runs: frees the players whose gamepad went away
-// once the devices have settled, and lets the adapter controllers join on a button press.
-static void UpdatePlayers()
+// Done from the controller polling, so only while a game runs: frees the players whose gamepad
+// went away once the devices have settled, and lets the adapter controllers join on a button press.
+void UpdatePlayers()
 {
   std::lock_guard lk(s_players_mutex);
   if (!s_players_enabled)
@@ -291,6 +327,14 @@ void AutoAssignGamepads()
 }
 
 void HandBackFirstPlayer()
+{
+}
+
+void UpdatePlayers()
+{
+}
+
+void ApplyPlayers()
 {
 }
 #endif

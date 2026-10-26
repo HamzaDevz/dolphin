@@ -25,6 +25,11 @@ void LoadConfig();
 void AutoAssignGamepads();
 // Android: gives player 1 back to the handheld's own gamepad, when it leaves its dock.
 void HandBackFirstPlayer();
+// Android: frees the players whose gamepad went away and maps the ones who joined. Called from
+// the controller polling.
+void UpdatePlayers();
+// Android: maps the players' gamepads again, after loading the controller configs undid them.
+void ApplyPlayers();
 void GenerateDynamicInputTextures();
 bool IsInitialized();
 

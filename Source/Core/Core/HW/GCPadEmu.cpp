@@ -268,18 +268,8 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
 
 void GCPad::LoadGamepadDefaults(const ControllerInterface& ciface, const ciface::Core::Device& device)
 {
-  // The inputs of the gamepad among the names, as one expression.
-  const auto any_of = [&device](std::initializer_list<std::string> names) {
-    std::string expression;
-    for (const std::string& name : names)
-    {
-      if (!device.FindInput(name))
-        continue;
-      if (!expression.empty())
-        expression += " | ";
-      expression += fmt::format("`{}`", name);
-    }
-    return expression;
+  const auto any_of = [&device](std::initializer_list<std::string_view> names) {
+    return InputCommon::AnyInputOf(device, names);
   };
 
   const auto lock = GetStateLock();

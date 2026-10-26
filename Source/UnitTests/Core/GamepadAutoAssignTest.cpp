@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <initializer_list>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "InputCommon/ControllerInterface/CoreDevice.h"
 #include "InputCommon/GamepadAutoAssign.h"
 
 using InputCommon::GamepadHotplug;
@@ -27,6 +30,29 @@ std::vector<std::string> Players(const GamepadPlayers& players)
   return {players.GetGamepad(0), players.GetGamepad(1), players.GetGamepad(2),
           players.GetGamepad(3)};
 }
+
+class FakeGamepad final : public ciface::Core::Device
+{
+public:
+  class FakeInput final : public Input
+  {
+  public:
+    explicit FakeInput(std::string name) : m_name(std::move(name)) {}
+    std::string GetName() const override { return m_name; }
+    ControlState GetState() const override { return 0; }
+
+  private:
+    std::string m_name;
+  };
+
+  explicit FakeGamepad(std::initializer_list<std::string> inputs)
+  {
+    for (const std::string& input : inputs)
+      AddInput(new FakeInput(input));
+  }
+  std::string GetName() const override { return "Xbox Wireless Controller"; }
+  std::string GetSource() const override { return "Android"; }
+};
 
 // The Odin alone, as when a game starts.
 GamepadPlayers OdinAlone()
@@ -161,6 +187,14 @@ TEST(GamepadPlayers, TellsGamepadsApart)
   EXPECT_TRUE(InputCommon::IsSameKindOfGamepad(DS4, "Android/7/Wireless Controller"));
   EXPECT_FALSE(InputCommon::IsSameKindOfGamepad(DS4, XBOX));
   EXPECT_FALSE(InputCommon::IsSameKindOfGamepad("", ""));
+}
+
+TEST(GamepadPlayers, MapsTheInputsTheGamepadHas)
+{
+  const FakeGamepad gamepad{"Button A", "Axis 22+"};
+  EXPECT_EQ(InputCommon::AnyInputOf(gamepad, {"Axis 18+", "Axis 22+", "Button A"}),
+            "`Axis 22+` | `Button A`");
+  EXPECT_EQ(InputCommon::AnyInputOf(gamepad, {"Button L3"}), "");
 }
 
 TEST(GamepadHotplug, SettlesOnceAfterTheDevicesStopChanging)

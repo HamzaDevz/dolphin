@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -49,6 +50,7 @@
 #include "InputCommon/ControllerEmu/ControlGroup/IRPassthrough.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ModifySettingsButton.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Tilt.h"
+#include "InputCommon/GamepadAutoAssign.h"
 
 namespace WiimoteEmu
 {
@@ -795,6 +797,69 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
   constexpr ExtensionNumber DEFAULT_EXT = ExtensionNumber::NUNCHUK;
   m_attachments->SetSelectedAttachment(DEFAULT_EXT);
   m_attachments->GetAttachmentList()[DEFAULT_EXT]->LoadDefaults();
+}
+
+void Wiimote::LoadGamepadDefaults(const ControllerInterface& ciface,
+                                  const ciface::Core::Device& device)
+{
+  const auto any_of = [&device](std::initializer_list<std::string_view> names) {
+    return InputCommon::AnyInputOf(device, names);
+  };
+
+  const auto lock = GetStateLock();
+  EmulatedController::LoadDefaults(ciface);
+  ciface::Core::DeviceQualifier qualifier;
+  qualifier.FromDevice(&device);
+  SetDefaultDevice(qualifier);
+
+  // A on the right face button, B on the bottom one and on the right trigger, except on the
+  // handheld's own gamepad, which reports the Nintendo layout.
+  if (device.GetName() == InputCommon::BUILT_IN_GAMEPAD)
+  {
+    m_buttons->SetControlExpression(0, any_of({"Button A"}));
+    m_buttons->SetControlExpression(1, any_of({"Axis 22+", "Button R2"}));
+  }
+  else
+  {
+    m_buttons->SetControlExpression(0, any_of({"Button B"}));
+    m_buttons->SetControlExpression(1, any_of({"Button A", "Axis 18+", "Axis 22+", "Button R2"}));
+  }
+  m_buttons->SetControlExpression(2, any_of({"Button X"}));   // 1
+  m_buttons->SetControlExpression(3, any_of({"Button Y"}));   // 2
+  m_buttons->SetControlExpression(4, any_of({"Select"}));     // -
+  m_buttons->SetControlExpression(5, any_of({"Start"}));      // +
+  m_buttons->SetControlExpression(6, any_of({"Button L3"}));  // Home
+
+  m_dpad->SetControlExpression(0, any_of({"Axis 16-"}));
+  m_dpad->SetControlExpression(1, any_of({"Axis 16+"}));
+  m_dpad->SetControlExpression(2, any_of({"Axis 15-"}));
+  m_dpad->SetControlExpression(3, any_of({"Axis 15+"}));
+
+  for (int i = 0; i < 3; ++i)
+    m_shake->SetControlExpression(i, any_of({"Button R1"}));
+
+  // Android reports the right stick as Z/RZ on most gamepads, as RX/RY on the others.
+  const bool z_rz = device.FindInput("Axis 11+") && device.FindInput("Axis 14+");
+  const int ir_x = z_rz ? 11 : 12;
+  const int ir_y = z_rz ? 14 : 13;
+  m_ir->SetControlExpression(0, any_of({fmt::format("Axis {}-", ir_y)}));
+  m_ir->SetControlExpression(1, any_of({fmt::format("Axis {}+", ir_y)}));
+  m_ir->SetControlExpression(2, any_of({fmt::format("Axis {}-", ir_x)}));
+  m_ir->SetControlExpression(3, any_of({fmt::format("Axis {}+", ir_x)}));
+  m_ir->SetControlExpression(5, any_of({"Button R3"}));  // Recenter
+
+  if (device.FindOutput("Motor 0"))
+    m_rumble->SetControlExpression(0, "`Motor 0`");
+
+  m_attachments->SetSelectedAttachment(ExtensionNumber::NUNCHUK);
+  auto* const nunchuk_buttons = GetNunchukGroup(NunchukGroup::Buttons);
+  nunchuk_buttons->SetControlExpression(0, any_of({"Button L1"}));  // C
+  nunchuk_buttons->SetControlExpression(1, any_of({"Axis 17+", "Axis 23+", "Button L2"}));  // Z
+  auto* const nunchuk_stick = GetNunchukGroup(NunchukGroup::Stick);
+  nunchuk_stick->SetControlExpression(0, any_of({"Axis 1-"}));
+  nunchuk_stick->SetControlExpression(1, any_of({"Axis 1+"}));
+  nunchuk_stick->SetControlExpression(2, any_of({"Axis 0-"}));
+  nunchuk_stick->SetControlExpression(3, any_of({"Axis 0+"}));
 }
 
 Extension* Wiimote::GetNoneExtension() const
