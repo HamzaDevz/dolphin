@@ -3,6 +3,7 @@
 package org.dolphinemu.dolphinemu.activities
 
 import android.content.DialogInterface
+import android.content.ClipData
 import android.content.Intent
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
@@ -1142,7 +1143,23 @@ class EmulationActivity : AppCompatActivity(), ThemeProvider {
             val launcher = Intent(activity, EmulationActivity::class.java)
             launcher.putExtra(EXTRA_SELECTED_GAMES, filePaths)
             launcher.putExtra(EXTRA_RIIVOLUTION, riivolution)
-            activity.startActivity(launcher)
+            // A frontend grants the activity it starts access to the game, and that activity finishes
+            // here: pass the access on.
+            val contentUris = filePaths.filter { ContentHandler.isContentUri(it) }
+            if (contentUris.isNotEmpty()) {
+                val clip = ClipData.newRawUri(null, Uri.parse(contentUris[0]))
+                contentUris.drop(1).forEach { clip.addItem(ClipData.Item(Uri.parse(it))) }
+                launcher.clipData = clip
+                launcher.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                activity.startActivity(launcher)
+            } catch (_: SecurityException) {
+                // There was no access to pass on.
+                launcher.clipData = null
+                launcher.removeFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                activity.startActivity(launcher)
+            }
         }
 
         private fun performLaunchChecks(activity: FragmentActivity, fromIntent: Boolean, continueCallback: Runnable) {

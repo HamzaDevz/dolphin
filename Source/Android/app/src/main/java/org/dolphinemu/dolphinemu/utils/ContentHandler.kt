@@ -87,10 +87,13 @@ object ContentHandler {
             val projection = arrayOf(Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE)
             getContentResolver().query(documentUri, projection, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
-                    return if (Document.MIME_TYPE_DIR == cursor.getString(0)) {
+                    // A FileProvider, such as a frontend's, only has the size column.
+                    val mimeType = cursor.getColumnIndex(Document.COLUMN_MIME_TYPE)
+                    val size = cursor.getColumnIndex(Document.COLUMN_SIZE)
+                    return if (mimeType != -1 && Document.MIME_TYPE_DIR == cursor.getString(mimeType)) {
                         -2
                     } else {
-                        if (cursor.isNull(1)) 0 else cursor.getLong(1)
+                        if (size == -1 || cursor.isNull(size)) 0 else cursor.getLong(size)
                     }
                 }
             }
