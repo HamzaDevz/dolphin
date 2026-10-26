@@ -56,6 +56,9 @@ static constexpr u16 ADAPTER_BUTTONS =
 static Common::EventHook s_gamepad_hotplug_hook;
 static std::mutex s_players_mutex;
 static InputCommon::GamepadPlayers s_players(PORT_COUNT);
+// Locked on its own: the devices change while the players are applied, when a Wii Remote's source
+// changes.
+static std::mutex s_hotplug_mutex;
 static InputCommon::GamepadHotplug s_hotplug;
 // Players join only while a game runs.
 static bool s_players_enabled = false;
@@ -126,12 +129,25 @@ static bool HasInputMapped(const ControllerEmu::EmulatedController& controller)
   });
 }
 
-// In a Wii game the player also holds the Wii Remote of the same number, with a Nunchuk.
-static void ApplyWiimotePlayer(int port, const ciface::Core::Device* device)
+// A Wii game set to play without the Wii Remote of this number, with a GameCube controller instead.
+static bool GameTakesNoWiimote(int port)
 {
   const auto& source = Config::GetInfoForWiimoteSource(port);
-  if (Config::Get(source) == WiimoteSource::Real)
-    return;
+  for (const Config::LayerType type : {Config::LayerType::LocalGame, Config::LayerType::GlobalGame})
+  {
+    const auto layer = Config::GetLayer(type);
+    if (layer && layer->Exists(source.GetLocation()))
+      return layer->Get(source) == WiimoteSource::None;
+  }
+  return false;
+}
+
+// Gives the Wii Remote of the same number, with a Nunchuk, to the player's gamepad, or unplugs it
+// without one. Returns the source the Wii Remote takes.
+static std::optional<WiimoteSource> ApplyWiimotePlayer(int port, const ciface::Core::Device* device)
+{
+  if (Config::Get(Config::GetInfoForWiimoteSource(port)) == WiimoteSource::Real)
+    return std::nullopt;
 
   auto* wiimote = static_cast<WiimoteEmu::Wiimote*>(Wiimote::GetConfig()->GetController(port));
   if (device)
@@ -139,11 +155,12 @@ static void ApplyWiimotePlayer(int port, const ciface::Core::Device* device)
     wiimote->LoadGamepadDefaults(g_controller_interface, *device);
     wiimote->UpdateReferences(g_controller_interface);
   }
-  Config::SetCurrent(source, device ? WiimoteSource::Emulated : WiimoteSource::None);
+  return device ? WiimoteSource::Emulated : WiimoteSource::None;
 }
 
-// Maps the port to its player's gamepad. A free port reads as unplugged.
-static void ApplyPlayer(int port)
+// Maps the port to its player's gamepad. A free port reads as unplugged. Returns the source the
+// Wii Remote of the same number takes.
+static std::optional<WiimoteSource> ApplyPlayer(int port)
 {
   const std::string& gamepad = s_players.GetGamepad(port);
   const std::optional<int> chan = GetAdapterChannel(gamepad);
@@ -158,16 +175,22 @@ static void ApplyPlayer(int port)
     device = g_controller_interface.FindDevice(qualifier);
   }
 
+  // In a Wii game the player holds a Wii Remote only, so as to join once, unless the game is set
+  // to play with a GameCube controller or the player holds one on the adapter.
+  const bool is_wii = Core::System::GetInstance().IsWii();
+  const bool gamecube_controller = !is_wii || chan || GameTakesNoWiimote(port);
+  const ciface::Core::Device* pad_device = gamecube_controller ? device.get() : nullptr;
+
   auto* pad = static_cast<GCPad*>(s_config.GetController(port));
   // Keep a mapping made for a gamepad of the same kind (same source and name, another number).
-  if (device && HasInputMapped(*pad) &&
+  if (pad_device && HasInputMapped(*pad) &&
       InputCommon::IsSameKindOfGamepad(pad->GetDefaultDevice().ToString(), gamepad))
   {
     pad->SetDefaultDevice(gamepad);
   }
-  else if (device)
+  else if (pad_device)
   {
-    pad->LoadGamepadDefaults(g_controller_interface, *device);
+    pad->LoadGamepadDefaults(g_controller_interface, *pad_device);
   }
   else
   {
@@ -175,17 +198,19 @@ static void ApplyPlayer(int port)
   }
   pad->UpdateReferences(g_controller_interface);
 
-  if (Core::System::GetInstance().IsWii())
-    ApplyWiimotePlayer(port, device.get());
+  std::optional<WiimoteSource> wiimote_source;
+  if (is_wii)
+    wiimote_source = ApplyWiimotePlayer(port, gamecube_controller ? nullptr : device.get());
 
   if (gamepad.empty())
   {
     INFO_LOG_FMT(SERIALINTERFACE, "Player {} is free", port + 1);
-    return;
+    return wiimote_source;
   }
 
   // Plug in a controller for this game only, like on the console.
-  if (Config::Get(Config::GetInfoForSIDevice(port)) == SerialInterface::SIDEVICE_NONE)
+  if (gamecube_controller &&
+      Config::Get(Config::GetInfoForSIDevice(port)) == SerialInterface::SIDEVICE_NONE)
   {
     Config::SetCurrent(Config::GetInfoForSIDevice(port), SerialInterface::SIDEVICE_GC_CONTROLLER);
   }
@@ -193,19 +218,30 @@ static void ApplyPlayer(int port)
   const std::string name = device ? device->GetName() : "GameCube Controller";
   INFO_LOG_FMT(SERIALINTERFACE, "Gamepad {} is player {}", gamepad, port + 1);
   OSD::AddMessage(fmt::format("Player {}: {}", port + 1, name), OSD::Duration::NORMAL);
+  return wiimote_source;
 }
 
 static void ApplyChangedPlayers()
 {
   if (!s_changed_ports)
     return;
-  const auto lock = ControllerEmu::EmulatedController::GetStateLock();
-  for (int port = 0; port < PORT_COUNT; ++port)
+  std::array<std::optional<WiimoteSource>, PORT_COUNT> wiimote_sources;
   {
-    if (s_changed_ports & (1 << port))
-      ApplyPlayer(port);
+    const auto lock = ControllerEmu::EmulatedController::GetStateLock();
+    for (int port = 0; port < PORT_COUNT; ++port)
+    {
+      if (s_changed_ports & (1 << port))
+        wiimote_sources[port] = ApplyPlayer(port);
+    }
   }
   s_changed_ports = 0;
+
+  // Out of the controllers' lock: a Wii Remote that changes source populates the devices again.
+  for (int port = 0; port < PORT_COUNT; ++port)
+  {
+    if (wiimote_sources[port])
+      Config::SetCurrent(Config::GetInfoForWiimoteSource(port), *wiimote_sources[port]);
+  }
 }
 
 // Maps every port again, a free one as unplugged.
@@ -270,7 +306,7 @@ void HandBackFirstPlayer()
 
 static void OnDevicesChanged()
 {
-  std::lock_guard lk(s_players_mutex);
+  std::lock_guard lk(s_hotplug_mutex);
   s_hotplug.DevicesChanged(InputCommon::GamepadHotplug::Clock::now());
 }
 
@@ -296,11 +332,15 @@ void UpdatePlayers()
     }
   }
 
+  bool settled;
+  {
+    std::lock_guard hotplug_lk(s_hotplug_mutex);
+    settled = s_hotplug.TakeSettled(InputCommon::GamepadHotplug::Clock::now());
+  }
   const bool undocked = s_undocked.exchange(false);
   const bool adapter_changed = adapter_connected != s_adapter_connected;
   s_adapter_connected = adapter_connected;
-  if (s_hotplug.TakeSettled(InputCommon::GamepadHotplug::Clock::now()) || adapter_changed ||
-      undocked)
+  if (settled || adapter_changed || undocked)
   {
     RefreshPlayers(undocked);
   }
