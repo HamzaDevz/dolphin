@@ -6,8 +6,14 @@ D=${0:A:h}
 PKG=${PKG:-org.dolphinemu.dolphinemu.odin3}
 OUT=$1; DUR=${2:-60}
 mkdir -p $OUT
-L=$($A shell "dumpsys SurfaceFlinger --list" | tr -d '\r' | grep -F "SurfaceView[$PKG/" |
-  grep -oE 'SurfaceView\[[^]]*\]\(BLAST\)#[0-9]+' | head -1)
+# SurfaceFlinger keeps the layers of the games stopped before, and the running game has an empty second
+# SurfaceView: the newest layer that has frames is the game.
+L=
+for C in $($A shell "dumpsys SurfaceFlinger --list" | tr -d '\r' | grep -F "SurfaceView[$PKG/" |
+    grep -oE 'SurfaceView\[[^]]*\]\(BLAST\)#[0-9]+' | sort -u -t'#' -k2 -nr); do
+  $A shell "dumpsys SurfaceFlinger --latency '$C'" | awk 'NF == 3 && $2 > 0 { f = 1 } END { exit !f }' &&
+    { L=$C; break; }
+done
 [ -z "$L" ] && { echo "no Dolphin surface for $PKG"; exit 1; }
 echo "layer=$L start=$(date +%T)" > $OUT/context.txt
 $A shell sh /data/local/tmp/poll.sh $DUR > $OUT/poll.csv &
