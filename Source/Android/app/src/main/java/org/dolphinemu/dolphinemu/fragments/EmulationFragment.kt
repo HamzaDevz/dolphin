@@ -293,7 +293,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         private fun deleteFile(path: String) {
             try {
                 val file = File(path)
-                if (!file.delete()) {
+                if (file.exists() && !file.delete()) {
                     Log.error("[EmulationFragment] Failed to delete ${file.absolutePath}")
                 }
             } catch (ignored: Exception) {
