@@ -41,6 +41,7 @@ public:
   ControlState GetVerticalOffset() const;
 
   void SetRelativeInput(bool enabled);
+  void SetTotalPitch(double degrees);
 
 private:
   Cursor::StateData UpdateState(Cursor::ReshapeData input);

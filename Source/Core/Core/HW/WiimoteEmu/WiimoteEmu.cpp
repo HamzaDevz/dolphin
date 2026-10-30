@@ -849,6 +849,9 @@ void Wiimote::LoadGamepadDefaults(const ControllerInterface& ciface,
   m_ir->SetControlExpression(2, any_of({fmt::format("Axis {}-", ir_x)}));
   m_ir->SetControlExpression(3, any_of({fmt::format("Axis {}+", ir_x)}));
   m_ir->SetControlExpression(5, any_of({"Button R3"}));  // Recenter
+  // A stick stops at its rim where a hand keeps turning: the default range left the bottom of the
+  // screen out of reach in WarioWare: Smooth Moves.
+  m_ir->SetTotalPitch(30);
 
   // Tilting points too, with the gamepad's own gyroscope or, for the handheld's own gamepad, the
   // handheld's.
@@ -879,7 +882,18 @@ void Wiimote::LoadGamepadDefaults(const ControllerInterface& ciface,
   if (device.FindOutput("Motor 0"))
     m_rumble->SetControlExpression(0, "`Motor 0`");
 
-  m_attachments->SetSelectedAttachment(ExtensionNumber::NUNCHUK);
+  // Holding R3 for a second unplugs the Nunchuk, or plugs it back in, for the games that ask for
+  // it, as WarioWare: Smooth Moves does.
+  if (device.FindInput("Button R3"))
+  {
+    m_attachments->GetSelectionSetting().GetInputReference().SetExpression(
+        fmt::format("if(toggle(hold(`Button R3`, 1)), {}, {})", int(ExtensionNumber::NONE),
+                    int(ExtensionNumber::NUNCHUK)));
+  }
+  else
+  {
+    m_attachments->SetSelectedAttachment(ExtensionNumber::NUNCHUK);
+  }
   auto* const nunchuk_buttons = GetNunchukGroup(NunchukGroup::Buttons);
   nunchuk_buttons->SetControlExpression(0, any_of({"Button L1"}));  // C
   nunchuk_buttons->SetControlExpression(1, any_of({"Axis 17+", "Axis 23+", "Button L2"}));  // Z

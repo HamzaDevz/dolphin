@@ -185,6 +185,11 @@ void Cursor::SetRelativeInput(bool value)
   m_relative_setting.SetValue(value);
 }
 
+void Cursor::SetTotalPitch(double degrees)
+{
+  m_pitch_setting.SetValue(degrees);
+}
+
 bool Cursor::StateData::IsVisible() const
 {
   return !std::isnan(x);
