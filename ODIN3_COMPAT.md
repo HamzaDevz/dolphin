@@ -53,9 +53,9 @@ Paquet `org.dolphinemu.dolphinemu.odin3`, installé à côté de l'officielle `o
 | The Legend of Zelda: The Wind Waker (Europe) `GZLP01` | 🟠 Menus/intro | écran titre | 34,7 fps à l'écran titre (le jeu tourne à 30) | aucune erreur au journal | 2026-10-28 | 2f5e540648 |
 | Viewtiful Joe (Europe) `GVJP08` | 🟠 Menus/intro | intro | 33,5 fps à l'intro | aucune erreur au journal | 2026-10-28 | 2f5e540648 |
 | Wario World (Europe) `GWWP01` | 🔴 Ne marche pas | alerte au démarrage | – | fichier, pas émulateur : warioworld.iso fait 275 Mo au lieu de 1,46 Go, « The disc could not be read » | 2026-10-28 | 2f5e540648 |
-| WarioWare: Smooth Moves (Europe) `RODP01` | 🟠 Menus/intro | intro | 60 fps | écritures NAND qui bloquent l'émulation 2 à 3 ms au démarrage | 2026-10-28 | 2f5e540648 |
+| WarioWare: Smooth Moves (Europe) `RODP01` | 🔵 Jouable | lancé par ES-DE, profil Mii créé, carte de Wario, premiers micro-jeux joués au pointeur | 60 fps à l'intro (28/10), micro-jeux pas mesurés | pointeur au stick droit d'une manette externe, clics justes ; OK du bas atteint depuis ce2b87ae29 (tangage 30°) ; R3 tenu 1 s débranche le Nunchuk qu'il réclame ; secousse sur R1 pas rencontrée, gyroscope de l'Odin pas vérifié (pas d'injection sans root) | 2026-10-30 | ce2b87ae29 |
 | Wiimms MKW Fun 2011-06 `RMCE09` | 🟠 Menus/intro | intro | pas mesuré (calque vide) | écritures NAND qui bloquent l'émulation 3 ms | 2026-10-28 | 2f5e540648 |
 | XIII (Europe) `GX3X41` | 🟠 Menus/intro | choix de la langue | 25 fps | aucune erreur au journal | 2026-10-28 | 2f5e540648 |
-| Zack & Wiki: Le Trésor de Barbaros (Europe) `RTZP08` | 🟠 Menus/intro | écran titre | 36 fps à l'intro, pause de 0,9 s | PAL60 activé ou non : même mesure | 2026-10-28 | 2f5e540648 |
+| Zack & Wiki: Le Trésor de Barbaros (Europe) `RTZP08` | 🔵 Jouable | lancé par ES-DE (« fichier introuvable » corrigé par b6b05d1222), partie jusqu'au tutoriel de l'avion | 36 fps à l'intro (28/10), partie pas mesurée | pointeur au stick droit, clics justes (Zack marche au point visé, levier examiné), sort de l'écran vers 60 % du stick avec l'indicateur du jeu ; secousse sur R1 vue (Wiki sonne) ; gyroscope pas vérifié | 2026-10-30 | ce2b87ae29 |
 
 Pas encore lancés sur notre build : les WAD (Castlevania ReBirth, Chronos Twins DX, Dr. Mario), la .rvz de Star Fox Adventures et game1.iso (doublons).
