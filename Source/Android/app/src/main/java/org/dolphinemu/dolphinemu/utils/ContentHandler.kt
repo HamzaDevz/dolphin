@@ -264,7 +264,9 @@ object ContentHandler {
     @JvmStatic
     fun unmangle(uri: String): Uri {
         val lastComponentEnd = getLastComponentEnd(uri)
-        val lastComponentStart = getLastComponentStart(uri, lastComponentEnd)
+        // A FileProvider, such as a frontend's, takes plain paths, which need no translation.
+        val lastComponentStart =
+            if (isDocumentsUri(uri)) getLastComponentStart(uri, lastComponentEnd) else 0
 
         return if (lastComponentStart == 0) {
             uri.substring(0, lastComponentEnd).toUri()
@@ -308,6 +310,11 @@ object ContentHandler {
         }
 
         return 0
+    }
+
+    private fun isDocumentsUri(uri: String): Boolean {
+        val firstSegment = uri.toUri().pathSegments.firstOrNull()
+        return firstSegment == "tree" || firstSegment == "document"
     }
 
     private fun treeToDocument(uri: Uri): Uri {
